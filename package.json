@@ -1,0 +1,86 @@
+{
+  "name": "ts-reveal-types",
+  "displayName": "ts-reveal-types",
+  "description": "",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.77.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "ts-reveal-types.yourCommand",
+        "title": "Your Command"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "ts-reveal-types.yourCommand",
+          "when": "editorLangId == typescript"
+        }
+      ]
+    }
+  },
+  "eslintConfig": {
+    "root": true,
+    "parser": "@typescript-eslint/parser",
+    "parserOptions": {
+      "ecmaVersion": 6,
+      "sourceType": "module"
+    },
+    "plugins": [
+      "@typescript-eslint"
+    ],
+    "extends": [
+      "eslint:recommended",
+      "plugin:@typescript-eslint/recommended",
+      "prettier"
+    ],
+    "rules": {
+      "@typescript-eslint/no-inferrable-types": "off"
+    },
+    "ignorePatterns": [
+      "out",
+      "dist",
+      "**/*.d.ts"
+    ]
+  },
+  "prettier": {
+    "semi": false,
+    "arrowParens": "avoid"
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/glob": "^8.1.0",
+    "@types/lodash.debounce": "^4.0.7",
+    "@types/mocha": "^10.0.1",
+    "@types/node": "16.x",
+    "@types/prettier": "^2.7.2",
+    "@types/vscode": "^1.77.0",
+    "@typescript-eslint/eslint-plugin": "^5.56.0",
+    "@typescript-eslint/parser": "^5.56.0",
+    "@vscode/test-electron": "^2.3.0",
+    "eslint": "^8.36.0",
+    "eslint-config-prettier": "^8.8.0",
+    "glob": "^8.1.0",
+    "mocha": "^10.2.0",
+    "prettier": "^2.8.7",
+    "typescript": "^4.9.5"
+  },
+  "dependencies": {
+    "lodash.debounce": "^4.0.8"
+  }
+}
