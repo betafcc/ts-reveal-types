@@ -14,15 +14,15 @@
   "contributes": {
     "commands": [
       {
-        "command": "ts-reveal-types.yourCommand",
-        "title": "Your Command"
+        "command": "ts-reveal-types.revealTypes",
+        "title": "TypeScript: Reveal Types"
       }
     ],
     "menus": {
       "commandPalette": [
         {
-          "command": "ts-reveal-types.yourCommand",
-          "when": "editorLangId == typescript"
+          "command": "ts-reveal-types.revealTypes",
+          "when": "editorLangId == typescript || editorLangId == typescriptreact"
         }
       ]
     }
@@ -52,6 +52,7 @@
     ]
   },
   "prettier": {
+    "printWidth": 120,
     "semi": false,
     "arrowParens": "avoid"
   },

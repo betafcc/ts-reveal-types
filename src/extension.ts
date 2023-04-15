@@ -2,141 +2,104 @@ import * as vscode from "vscode"
 import * as ts from "typescript"
 import * as prettier from "prettier"
 
-export const activate = (context: vscode.ExtensionContext) => {
-  const state = {
-    content: "",
-    changeTextSub: null as vscode.Disposable | null,
-    changeActiveSub: null as vscode.Disposable | null,
+export async function activate(context: vscode.ExtensionContext) {
+  // normal import complains lack of esModuleInterop, but if I allow it, it breaks other stuff
+  const debounce = await import("lodash.debounce")
+
+  const contentMap = new Map<string, string>()
+  const subscription = {
+    sourceChange: null as null | vscode.Disposable,
+    activeTextEditor: null as null | vscode.Disposable,
+    changeVisibleTextEditors: null as null | vscode.Disposable,
   }
 
-  const resultUri = vscode.Uri.parse(
-    "ts-reveal-types://authority/revealed.d.ts"
-  )
+  const outputChangeEmitter = new vscode.EventEmitter<vscode.Uri>()
 
-  const onDidChangeEmitter = new vscode.EventEmitter<vscode.Uri>()
+  const subscribeSourceChange = () =>
+    vscode.workspace.onDidChangeTextDocument(
+      debounce(async event => {
+        const uri = event.document.uri
+        if (!contentMap.has(uri.path)) return
+
+        contentMap.set(uri.path, revealTypes(event.document.fileName, event.document.getText()))
+        outputChangeEmitter.fire(uri.with({ scheme: "ts-reveal-types" }))
+      }, 1000)
+    )
+
+  const subscribeActiveTextEditorChange = () =>
+    vscode.window.onDidChangeActiveTextEditor(async event => {
+      if (!event?.document || !contentMap.has(event.document.uri.path)) {
+        subscription.sourceChange?.dispose()
+        subscription.sourceChange = null
+      } else if (subscription.sourceChange === null) {
+        subscription.sourceChange = subscribeSourceChange()
+      }
+    })
+
+  const subscribeChangeVisibleTextEditors = () =>
+    vscode.window.onDidChangeVisibleTextEditors(async () => {
+      const stillOpen = new Set(vscode.workspace.textDocuments.map(doc => doc.uri.path))
+
+      for (const path of contentMap.keys()) if (!stillOpen.has(path)) contentMap.delete(path)
+
+      if (contentMap.size === 0) {
+        subscription.activeTextEditor?.dispose()
+        subscription.activeTextEditor = null
+
+        subscription.changeVisibleTextEditors?.dispose()
+        subscription.changeVisibleTextEditors = null
+
+        subscription.sourceChange?.dispose()
+        subscription.sourceChange = null
+      }
+    })
 
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider("ts-reveal-types", {
-      onDidChange: onDidChangeEmitter.event,
-      provideTextDocumentContent: () => state.content,
+      onDidChange: outputChangeEmitter.event,
+      provideTextDocumentContent(uri) {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        return contentMap.get(uri.path)!
+      },
     }),
 
-    vscode.commands.registerCommand("ts-reveal-types.yourCommand", async () => {
-      // vscode.window.showInformationMessage("called command")
+    vscode.commands.registerTextEditorCommand("ts-reveal-types.revealTypes", async editor => {
+      const uri = editor.document.uri
+      if (contentMap.has(uri.path)) return
 
-      // normal import complains lack of esModuleInterop, but if I allow it, it breaks other stuff
-      const debounce = await import("lodash.debounce")
+      if (subscription.sourceChange === null) subscription.sourceChange = subscribeSourceChange()
+      if (subscription.activeTextEditor === null) subscription.activeTextEditor = subscribeActiveTextEditorChange()
+      if (subscription.changeVisibleTextEditors === null)
+        subscription.changeVisibleTextEditors = subscribeChangeVisibleTextEditors()
 
-      const targetEditor = vscode.window.activeTextEditor
-      if (!targetEditor) {
-        vscode.window.showWarningMessage("No active editor to analyse")
-        return
-      }
+      contentMap.set(uri.path, revealTypes(editor.document.fileName, editor.document.getText()))
 
-      state.content = analyze(
-        targetEditor.document.fileName,
-        targetEditor.document.getText()
-      )
-      onDidChangeEmitter.fire(resultUri)
-
-      const outputDoc = await vscode.workspace.openTextDocument(resultUri)
-      await vscode.window.showTextDocument(outputDoc, {
-        viewColumn: vscode.ViewColumn.Beside,
-        preview: false,
-        preserveFocus: true,
-      })
-
-      const subscribe = () =>
-        vscode.workspace.onDidChangeTextDocument(
-          debounce(event => {
-            // vscode.window.showInformationMessage("changed text document")
-
-            if (
-              event.document === vscode.window.activeTextEditor?.document &&
-              event.document.languageId === "typescript"
-            ) {
-              state.content = analyze(
-                targetEditor.document.fileName,
-                targetEditor.document.getText()
-              )
-              onDidChangeEmitter.fire(resultUri)
-            }
-          }, 1000)
-        )
-
-      state.changeTextSub = subscribe()
-
-      state.changeActiveSub = vscode.window.onDidChangeActiveTextEditor(
-        editor => {
-          // vscode.window.showInformationMessage("changed active text editor")
-
-          if (editor?.document === targetEditor.document) {
-            state.changeTextSub?.dispose()
-            state.changeTextSub = subscribe()
-          } else {
-            state.changeTextSub?.dispose()
-            state.changeTextSub = null
-          }
-        }
-      )
-
-      const changeVisibleSub = vscode.window.onDidChangeVisibleTextEditors(
-        () => {
-          vscode.window.showInformationMessage("changed visible text editors")
-
-          // when either the ouput document or the target document is closed, dispose the subscriptions
-          if (targetEditor.document.isClosed || outputDoc.isClosed) {
-            // vscode.window.showInformationMessage("disposing subscriptions")
-            state.changeTextSub?.dispose()
-            state.changeTextSub = null
-            state.changeActiveSub?.dispose()
-            state.changeActiveSub = null
-            changeVisibleSub.dispose()
-          }
+      await vscode.window.showTextDocument(
+        await vscode.workspace.openTextDocument(uri.with({ scheme: "ts-reveal-types" })),
+        {
+          viewColumn: vscode.ViewColumn.Beside,
+          preview: false,
+          preserveFocus: true,
         }
       )
     })
   )
 }
 
-const analyze = (fileName: string, sourceCode: string) => {
+const revealTypes = (fileName: string, sourceCode: string) => {
   // Create a compiler host that serves a virtual copy of the file,
-  // so the command can work with content on editor instead of on disk
-  const sourceFile = ts.createSourceFile(
-    fileName,
-    sourceCode,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS
-  )
+  // so the command can work with changes on editor instead of on disk
+  const sourceFile = ts.createSourceFile(fileName, sourceCode, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
 
   const compilerHost = ts.createCompilerHost({}, true)
   const originalGetSourceFile = compilerHost.getSourceFile
   compilerHost.getSourceFile = (requested, ...args) =>
-    requested === fileName
-      ? sourceFile
-      : originalGetSourceFile.call(compilerHost, requested, ...args)
+    requested === fileName ? sourceFile : originalGetSourceFile.call(compilerHost, requested, ...args)
 
   const program = ts.createProgram([fileName], {}, compilerHost)
   const checker = program.getTypeChecker()
 
-  return prettier.format(
-    getTypeDeclarations(
-      program.getSourceFile(fileName)!,
-      checker
-    ).join("\n\n"),
-    {
-      parser: "typescript",
-      semi: false,
-    }
-  )
-}
-
-const getTypeDeclarations = (
-  sourceFile: ts.SourceFile,
-  checker: ts.TypeChecker
-) =>
-  sourceFile
+  const typeDeclarations = sourceFile
     .getChildren()
     .flatMap(c => c.getChildren())
     .filter(ts.isTypeAliasDeclaration)
@@ -149,3 +112,15 @@ const getTypeDeclarations = (
           ts.TypeFormatFlags.InTypeAlias | ts.TypeFormatFlags.NoTruncation
         )
     )
+
+  return prettier.format(typeDeclarations.join("\n\n"), {
+    parser: "typescript",
+    semi: false,
+  })
+}
+
+// const transformUri = (uri: vscode.Uri) =>
+//   uri.with({
+//     scheme: "ts-reveal-types",
+//     path: uri.path.replace(/(.ts){0,1}$/, '.d.ts')
+//   })
