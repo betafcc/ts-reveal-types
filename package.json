@@ -1,8 +1,16 @@
 {
   "name": "ts-reveal-types",
-  "displayName": "ts-reveal-types",
+  "displayName": "TypeScript Reveal Types",
   "description": "",
-  "version": "0.0.1",
+  "icon": "images/logo.png",
+  "version": "1.0.0",
+  "publisher": "betafcc",
+  "author": "Beta Faccion <betafcc@gmail.com> (https://github.com/betafcc)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/betafcc/ts-reveal-types.git"
+  },
   "engines": {
     "vscode": "^1.77.0"
   },

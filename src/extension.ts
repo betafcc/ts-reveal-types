@@ -2,93 +2,121 @@ import * as vscode from "vscode"
 import * as ts from "typescript"
 import * as prettier from "prettier"
 
+type AnyKey = string | number | symbol
+
+export class TwoKeysRecord<KA extends AnyKey, KB extends AnyKey, V> {
+  static create() {
+    return new this({}, {})
+  }
+
+  constructor(readonly left: Record<KA, { right: KB; value: V }>, readonly right: Record<KB, { left: KA; value: V }>) {}
+
+  set(left: KA, right: KB, value: V) {
+    this.left[left] = { right, value }
+    this.right[right] = { left, value }
+  }
+
+  delete(key: { left: KA } | { right: KB } | { left: KA; right: KB }) {
+    if ("left" in key) {
+      delete this.right[this.left[key.left].right]
+      delete this.left[key.left]
+    } else if ("right" in key) {
+      delete this.left[this.right[key.right].left]
+      delete this.right[key.right]
+    }
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext) {
   // normal import complains lack of esModuleInterop, but if I allow it, it breaks other stuff
   const debounce = await import("lodash.debounce")
-
-  const contentMap = new Map<string, string>()
-  const subscription = {
-    sourceChange: null as null | vscode.Disposable,
-    activeTextEditor: null as null | vscode.Disposable,
-    changeVisibleTextEditors: null as null | vscode.Disposable,
+  const targetEmitter = new vscode.EventEmitter<vscode.Uri>()
+  // TwoKeysRecord<source Uri, target Uri, target content>
+  const docs: TwoKeysRecord<string, string, string> = TwoKeysRecord.create()
+  const subs = {
+    source: null as null | vscode.Disposable,
+    active: null as null | vscode.Disposable,
+    visible: null as null | vscode.Disposable,
   }
 
-  const outputChangeEmitter = new vscode.EventEmitter<vscode.Uri>()
-
-  const subscribeSourceChange = () =>
+  const onSource = () =>
     vscode.workspace.onDidChangeTextDocument(
-      debounce(async event => {
-        const uri = event.document.uri
-        if (!contentMap.has(uri.path)) return
+      debounce(async (event: vscode.TextDocumentChangeEvent) => {
+        const source = event.document.uri.toString()
+        if (!(source in docs.left)) return
 
-        contentMap.set(uri.path, revealTypes(event.document.fileName, event.document.getText()))
-        outputChangeEmitter.fire(uri.with({ scheme: "ts-reveal-types" }))
+        docs.set(source, docs.left[source].right, reveal(event.document))
+
+        targetEmitter.fire(vscode.Uri.parse(docs.left[source].right))
       }, 1000)
     )
 
-  const subscribeActiveTextEditorChange = () =>
+  const onActive = () =>
     vscode.window.onDidChangeActiveTextEditor(async event => {
-      if (!event?.document || !contentMap.has(event.document.uri.path)) {
-        subscription.sourceChange?.dispose()
-        subscription.sourceChange = null
-      } else if (subscription.sourceChange === null) {
-        subscription.sourceChange = subscribeSourceChange()
+      const source = event?.document.uri.toString()
+
+      if (!source || !(source in docs.left)) {
+        subs.source?.dispose()
+        subs.source = null
+      } else if (subs.source === null) {
+        subs.source = onSource()
       }
     })
 
-  const subscribeChangeVisibleTextEditors = () =>
-    vscode.window.onDidChangeVisibleTextEditors(async () => {
-      const stillOpen = new Set(vscode.workspace.textDocuments.map(doc => doc.uri.path))
+  const onTab = () =>
+    vscode.window.tabGroups.onDidChangeTabs(async event => {
+      for (const tab of event.closed) {
+        if (tab.input instanceof vscode.TabInputText) {
+          const target = tab.input.uri.toString()
+          if (target in docs.right) docs.delete({ right: target })
+        }
+      }
 
-      for (const path of contentMap.keys()) if (!stillOpen.has(path)) contentMap.delete(path)
-
-      if (contentMap.size === 0) {
-        subscription.activeTextEditor?.dispose()
-        subscription.activeTextEditor = null
-
-        subscription.changeVisibleTextEditors?.dispose()
-        subscription.changeVisibleTextEditors = null
-
-        subscription.sourceChange?.dispose()
-        subscription.sourceChange = null
+      if (Object.keys(docs.right).length === 0) {
+        subs.active?.dispose()
+        subs.active = null
+        subs.visible?.dispose()
+        subs.visible = null
+        subs.source?.dispose()
+        subs.source = null
       }
     })
 
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider("ts-reveal-types", {
-      onDidChange: outputChangeEmitter.event,
+      onDidChange: targetEmitter.event,
       provideTextDocumentContent(uri) {
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        return contentMap.get(uri.path)!
+        return docs.right[uri.toString()].value
       },
     }),
 
     vscode.commands.registerTextEditorCommand("ts-reveal-types.revealTypes", async editor => {
-      const uri = editor.document.uri
-      if (contentMap.has(uri.path)) return
+      const source = editor.document.uri.toString()
 
-      if (subscription.sourceChange === null) subscription.sourceChange = subscribeSourceChange()
-      if (subscription.activeTextEditor === null) subscription.activeTextEditor = subscribeActiveTextEditorChange()
-      if (subscription.changeVisibleTextEditors === null)
-        subscription.changeVisibleTextEditors = subscribeChangeVisibleTextEditors()
+      if (source in docs.left) return
 
-      contentMap.set(uri.path, revealTypes(editor.document.fileName, editor.document.getText()))
+      const target = transformUri(editor.document.uri).toString()
 
-      await vscode.window.showTextDocument(
-        await vscode.workspace.openTextDocument(uri.with({ scheme: "ts-reveal-types" })),
-        {
-          viewColumn: vscode.ViewColumn.Beside,
-          preview: false,
-          preserveFocus: true,
-        }
-      )
+      docs.set(source, target, reveal(editor.document))
+
+      if (subs.source === null) subs.source = onSource()
+      if (subs.active === null) subs.active = onActive()
+      if (subs.visible === null) subs.visible = onTab()
+
+      await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.parse(target)), {
+        viewColumn: vscode.ViewColumn.Beside,
+        preview: false,
+        preserveFocus: true,
+      })
     })
   )
 }
 
-const revealTypes = (fileName: string, sourceCode: string) => {
+const reveal = (doc: vscode.TextDocument) => revealFromSource(doc.fileName, doc.getText())
+
+const revealFromSource = (fileName: string, sourceCode: string) => {
   // Create a compiler host that serves a virtual copy of the file,
-  // so the command can work with changes on editor instead of on disk
+  // so it works with content on editor instead of on disk
   const sourceFile = ts.createSourceFile(fileName, sourceCode, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
 
   const compilerHost = ts.createCompilerHost({}, true)
@@ -119,8 +147,8 @@ const revealTypes = (fileName: string, sourceCode: string) => {
   })
 }
 
-// const transformUri = (uri: vscode.Uri) =>
-//   uri.with({
-//     scheme: "ts-reveal-types",
-//     path: uri.path.replace(/(.ts){0,1}$/, '.d.ts')
-//   })
+const transformUri = (uri: vscode.Uri) =>
+  uri.with({
+    scheme: "ts-reveal-types",
+    path: uri.path.replace(/(.tsx?){0,1}$/, ".d.ts"),
+  })
