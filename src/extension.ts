@@ -85,23 +85,27 @@ export function activate(context: vscode.ExtensionContext) {
     })
 
   const onTab = () =>
-    vscode.window.tabGroups.onDidChangeTabs(async event => {
-      for (const tab of event.closed) {
-        if (tab.input instanceof vscode.TabInputText) {
-          const target = tab.input.uri.toString()
-          if (target in docs.right) docs.delete({ right: target })
-        }
-      }
+    "tabGroups" in vscode.window && "onDidChangeTabs" in vscode.window.tabGroups
+      ? vscode.window.tabGroups.onDidChangeTabs(async event => {
+          for (const tab of event.closed) {
+            if (tab.input instanceof vscode.TabInputText) {
+              const target = tab.input.uri.toString()
+              if (target in docs.right) docs.delete({ right: target })
+            }
+          }
 
-      if (Object.keys(docs.right).length === 0) {
-        subs.active?.dispose()
-        subs.active = null
-        subs.visible?.dispose()
-        subs.visible = null
-        subs.source?.dispose()
-        subs.source = null
-      }
-    })
+          if (Object.keys(docs.right).length === 0) {
+            subs.active?.dispose()
+            subs.active = null
+            subs.visible?.dispose()
+            subs.visible = null
+            subs.source?.dispose()
+            subs.source = null
+          }
+        })
+      : {
+          dispose: () => null,
+        }
 
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider("ts-reveal-types", {
