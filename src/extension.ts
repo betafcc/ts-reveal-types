@@ -1,10 +1,11 @@
 import * as vscode from "vscode"
 import * as ts from "typescript"
 import * as prettier from "prettier"
+import { debounce } from "lodash"
 
 type AnyKey = string | number | symbol
 
-export class TwoKeysRecord<KA extends AnyKey, KB extends AnyKey, V> {
+class TwoKeysRecord<KA extends AnyKey, KB extends AnyKey, V> {
   static create() {
     return new this({}, {})
   }
@@ -27,9 +28,7 @@ export class TwoKeysRecord<KA extends AnyKey, KB extends AnyKey, V> {
   }
 }
 
-export async function activate(context: vscode.ExtensionContext) {
-  // normal import complains lack of esModuleInterop, but if I allow it, it breaks other stuff
-  const debounce = await import("lodash.debounce")
+export function activate(context: vscode.ExtensionContext) {
   const targetEmitter = new vscode.EventEmitter<vscode.Uri>()
   // TwoKeysRecord<source Uri, target Uri, target content>
   const docs: TwoKeysRecord<string, string, string> = TwoKeysRecord.create()
@@ -38,6 +37,28 @@ export async function activate(context: vscode.ExtensionContext) {
     active: null as null | vscode.Disposable,
     visible: null as null | vscode.Disposable,
   }
+
+  context.subscriptions.push(
+    vscode.commands.registerTextEditorCommand("ts-reveal-types.revealTypes", async editor => {
+      const source = editor.document.uri.toString()
+
+      if (source in docs.left) return
+
+      const target = transformUri(editor.document.uri).toString()
+
+      docs.set(source, target, reveal(editor.document))
+
+      if (subs.source === null) subs.source = onSource()
+      if (subs.active === null) subs.active = onActive()
+      if (subs.visible === null) subs.visible = onTab()
+
+      await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.parse(target)), {
+        viewColumn: vscode.ViewColumn.Beside,
+        preview: false,
+        preserveFocus: true,
+      })
+    })
+  )
 
   const onSource = () =>
     vscode.workspace.onDidChangeTextDocument(
@@ -88,26 +109,6 @@ export async function activate(context: vscode.ExtensionContext) {
       provideTextDocumentContent(uri) {
         return docs.right[uri.toString()].value
       },
-    }),
-
-    vscode.commands.registerTextEditorCommand("ts-reveal-types.revealTypes", async editor => {
-      const source = editor.document.uri.toString()
-
-      if (source in docs.left) return
-
-      const target = transformUri(editor.document.uri).toString()
-
-      docs.set(source, target, reveal(editor.document))
-
-      if (subs.source === null) subs.source = onSource()
-      if (subs.active === null) subs.active = onActive()
-      if (subs.visible === null) subs.visible = onTab()
-
-      await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.parse(target)), {
-        viewColumn: vscode.ViewColumn.Beside,
-        preview: false,
-        preserveFocus: true,
-      })
     })
   )
 }
